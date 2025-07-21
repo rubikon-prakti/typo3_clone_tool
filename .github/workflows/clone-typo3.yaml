@@ -2,47 +2,6 @@ name: TYPO3 Database and File Sync
 
 on:
   workflow_dispatch:
-    inputs:
-      source_server:
-        description: 'Source server hostname/domain (is the same)'
-        required: true
-        type: string
-      source_path:
-        description: 'Source TYPO3 root path'
-        required: true
-        type: string
-      target_server:
-        description: 'Target server hostname/domain (is the same)'
-        required: true
-        type: string
-      target_path:
-        description: 'Target TYPO3 root path'
-        required: true
-        type: string
-      source_ssh_key:
-        description: 'Source SSH Private Key'
-        required: true
-        type: string
-      target_ssh_key:
-        description: 'Target SSH Private Key'
-        required: true
-        type: string
-      source_ssh_user:
-        description: 'Source SSH User'
-        required: true
-        type: string
-      target_ssh_user:
-        description: 'Target SSH User'
-        required: true
-        type: string
-      db_password:
-        description: 'Database Password'
-        required: true
-        type: string
-      db_name:
-        description: 'Database User/Name'
-        required: true
-        type: string
 
 jobs:
   sync:
@@ -56,19 +15,19 @@ jobs:
       uses: webfactory/ssh-agent@v0.9.0
       with:
         ssh-private-key: |
-          ${{ inputs.source_ssh_key }}
-          ${{ inputs.target_ssh_key }}
+          ${{ secrets.SOURCE_SSH_KEY }}
+          ${{ secrets.TARGET_SSH_KEY }}
     
     - name: Add SSH known hosts
       run: |
-        ssh-keyscan -H ${{ inputs.source_server }} >> ~/.ssh/known_hosts
-        ssh-keyscan -H ${{ inputs.target_server }} >> ~/.ssh/known_hosts
+        ssh-keyscan -H ${{ secrets.SOURCE_SERVER }} >> ~/.ssh/known_hosts
+        ssh-keyscan -H ${{ secrets.TARGET_SERVER }} >> ~/.ssh/known_hosts
     
     - name: Export database from source server
       run: |
         echo "Exporting database from source server..."
-        ssh ${{ inputs.source_ssh_user }}@${{ inputs.source_server }} \
-          "cd ${{ inputs.source_path }} && ./vendor/bin/typo3 database:export" > live.sql
+        ssh ${{ secrets.SOURCE_SSH_USER }}@${{ secrets.SOURCE_SERVER }} \
+          "cd ${{ secrets.SOURCE_PATH }} && ./vendor/bin/typo3 database:export" > live.sql
         
         echo "Database export completed. Size: $(wc -l < live.sql) lines"
     
@@ -77,7 +36,7 @@ jobs:
         echo "Processing database dump..."
         
         # Replace domains in the SQL dump
-        sed -i "s/${{ inputs.source_server }}/${{ inputs.target_server }}/g" live.sql
+        sed -i "s/${{ secrets.SOURCE_SERVER }}/${{ secrets.TARGET_SERVER }}/g" live.sql
         
         echo "Database processing completed"
     
@@ -86,25 +45,25 @@ jobs:
         echo "Uploading and importing database to target server..."
         
         # Upload SQL file
-        scp live.sql ${{ inputs.target_ssh_user }}@${{ inputs.target_server }}:${{ inputs.target_path }}/
+        scp live.sql ${{ secrets.TARGET_SSH_USER }}@${{ secrets.TARGET_SERVER }}:${{ secrets.TARGET_PATH }}/
         
         # Import database
-        ssh ${{ inputs.target_ssh_user }}@${{ inputs.target_server }} << 'EOF'
-          cd ${{ inputs.target_path }}
+        ssh ${{ secrets.TARGET_SSH_USER }}@${{ secrets.TARGET_SERVER }} << 'EOF'
+          cd ${{ secrets.TARGET_PATH }}
           
           # Clear existing database
           if [ -f "./clearDB.sql" ]; then
-            mysql -u ${{ inputs.db_name }} -p${{ inputs.db_password }} ${{ inputs.db_name }} < ./clearDB.sql
+            mysql -u ${{ secrets.DB_NAME }} -p${{ secrets.DB_PASSWORD }} ${{ secrets.DB_NAME }} < ./clearDB.sql
           fi
           
           # Import new database
-          mysql -u ${{ inputs.db_name }} -p${{ inputs.db_password }} ${{ inputs.db_name }} < ./live.sql
+          mysql -u ${{ secrets.DB_NAME }} -p${{ secrets.DB_PASSWORD }} ${{ secrets.DB_NAME }} < ./live.sql
           
           # Additional database updates
-          mysql -u ${{ inputs.db_name }} -p${{ inputs.db_password }} -e "UPDATE sys_template SET config = REPLACE(config, '${{ inputs.source_server }}', '${{ inputs.target_server }}');" ${{ inputs.db_name }}
-          mysql -u ${{ inputs.db_name }} -p${{ inputs.db_password }} -e "UPDATE sys_template SET constants = REPLACE(constants, '${{ inputs.source_server }}', '${{ inputs.target_server }}');" ${{ inputs.db_name }}
-          mysql -u ${{ inputs.db_name }} -p${{ inputs.db_password }} -e "UPDATE tt_content SET bodytext = REPLACE(bodytext, '${{ inputs.source_server }}', '${{ inputs.target_server }}');" ${{ inputs.db_name }}
-          mysql -u ${{ inputs.db_name }} -p${{ inputs.db_password }} -e "UPDATE pages SET url = REPLACE(url, '${{ inputs.source_server }}', '${{ inputs.target_server }}') WHERE url IS NOT NULL;" ${{ inputs.db_name }}
+          mysql -u ${{ secrets.DB_NAME }} -p${{ secrets.DB_PASSWORD }} -e "UPDATE sys_template SET config = REPLACE(config, '${{ secrets.SOURCE_SERVER }}', '${{ secrets.TARGET_SERVER }}');" ${{ secrets.DB_NAME }}
+          mysql -u ${{ secrets.DB_NAME }} -p${{ secrets.DB_PASSWORD }} -e "UPDATE sys_template SET constants = REPLACE(constants, '${{ secrets.SOURCE_SERVER }}', '${{ secrets.TARGET_SERVER }}');" ${{ secrets.DB_NAME }}
+          mysql -u ${{ secrets.DB_NAME }} -p${{ secrets.DB_PASSWORD }} -e "UPDATE tt_content SET bodytext = REPLACE(bodytext, '${{ secrets.SOURCE_SERVER }}', '${{ secrets.TARGET_SERVER }}');" ${{ secrets.DB_NAME }}
+          mysql -u ${{ secrets.DB_NAME }} -p${{ secrets.DB_PASSWORD }} -e "UPDATE pages SET url = REPLACE(url, '${{ secrets.SOURCE_SERVER }}', '${{ secrets.TARGET_SERVER }}') WHERE url IS NOT NULL;" ${{ secrets.DB_NAME }}
           
           # Cleanup
           rm -f ./live.sql
@@ -119,7 +78,7 @@ jobs:
         
         # Sync files from source to GitHub runner
         rsync -azP -e "ssh" \
-          ${{ inputs.source_ssh_user }}@${{ inputs.source_server }}:${{ inputs.source_path }}/ \
+          ${{ secrets.SOURCE_SSH_USER }}@${{ secrets.SOURCE_SERVER }}:${{ secrets.SOURCE_PATH }}/ \
           temp_sync/ \
           --exclude='*.log' \
           --exclude='var/cache/*' \
@@ -129,7 +88,7 @@ jobs:
         # Sync files from GitHub runner to target
         rsync -azP -e "ssh" \
           temp_sync/ \
-          ${{ inputs.target_ssh_user }}@${{ inputs.target_server }}:${{ inputs.target_path }}/ \
+          ${{ secrets.TARGET_SSH_USER }}@${{ secrets.TARGET_SERVER }}:${{ secrets.TARGET_PATH }}/ \
           --delete \
           --mkpath
         
@@ -140,8 +99,8 @@ jobs:
       run: |
         echo "Updating configuration on target server..."
         
-        ssh ${{ inputs.target_ssh_user }}@${{ inputs.target_server }} << 'EOF'
-          cd ${{ inputs.target_path }}
+        ssh ${{ secrets.TARGET_SSH_USER }}@${{ secrets.TARGET_SERVER }} << 'EOF'
+          cd ${{ secrets.TARGET_PATH }}
           
           # Update database configuration
           CONFIG_FILE="config/system/settings.php"
@@ -149,9 +108,9 @@ jobs:
             cp "$CONFIG_FILE" "$CONFIG_FILE.backup"
             
             # Update database settings
-            sed -i "s/'dbname' => '[^']*'/'dbname' => '${{ inputs.db_name }}'/g" "$CONFIG_FILE"
-            sed -i "s/'user' => '[^']*'/'user' => '${{ inputs.db_name }}'/g" "$CONFIG_FILE"
-            sed -i "s/'password' => '[^']*'/'password' => '${{ inputs.db_password }}'/g" "$CONFIG_FILE"
+            sed -i "s/'dbname' => '[^']*'/'dbname' => '${{ secrets.DB_NAME }}'/g" "$CONFIG_FILE"
+            sed -i "s/'user' => '[^']*'/'user' => '${{ secrets.DB_NAME }}'/g" "$CONFIG_FILE"
+            sed -i "s/'password' => '[^']*'/'password' => '${{ secrets.DB_PASSWORD }}'/g" "$CONFIG_FILE"
           fi
           
           # Create development robots.txt
