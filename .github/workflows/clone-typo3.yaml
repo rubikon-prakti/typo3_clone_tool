@@ -112,6 +112,11 @@ jobs:
             sed -i "s/'user' => '[^']*'/'user' => '${{ secrets.DB_NAME }}'/g" "$CONFIG_FILE"
             sed -i "s/'password' => '[^']*'/'password' => '${{ secrets.DB_PASSWORD }}'/g" "$CONFIG_FILE"
           fi
+
+          # Backup current robots.txt if it exists
+          if [ -f "public/robots.txt" ]; then
+            cp "public/robots.txt" "public/robots-live.txt"
+          fi
           
           # Create development robots.txt
           cat > "public/robots.txt" << 'ROBOTS_EOF'
