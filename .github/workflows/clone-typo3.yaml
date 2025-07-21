@@ -1,0 +1,195 @@
+name: TYPO3 Database and File Sync
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_server:
+        description: 'Source server hostname/domain (is the same)'
+        required: true
+        type: string
+      source_path:
+        description: 'Source TYPO3 root path'
+        required: true
+        type: string
+      target_server:
+        description: 'Target server hostname/domain (is the same)'
+        required: true
+        type: string
+      target_path:
+        description: 'Target TYPO3 root path'
+        required: true
+        type: string
+      source_ssh_key:
+        description: 'Source SSH Private Key'
+        required: true
+        type: string
+      target_ssh_key:
+        description: 'Target SSH Private Key'
+        required: true
+        type: string
+      source_ssh_user:
+        description: 'Source SSH User'
+        required: true
+        type: string
+      target_ssh_user:
+        description: 'Target SSH User'
+        required: true
+        type: string
+      db_password:
+        description: 'Database Password'
+        required: true
+        type: string
+      db_name:
+        description: 'Database User/Name'
+        required: true
+        type: string
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      
+    - name: Setup SSH Agent
+      uses: webfactory/ssh-agent@v0.9.0
+      with:
+        ssh-private-key: |
+          ${{ inputs.source_ssh_key }}
+          ${{ inputs.target_ssh_key }}
+    
+    - name: Add SSH known hosts
+      run: |
+        ssh-keyscan -H ${{ inputs.source_server }} >> ~/.ssh/known_hosts
+        ssh-keyscan -H ${{ inputs.target_server }} >> ~/.ssh/known_hosts
+    
+    - name: Export database from source server
+      run: |
+        echo "Exporting database from source server..."
+        ssh ${{ inputs.source_ssh_user }}@${{ inputs.source_server }} \
+          "cd ${{ inputs.source_path }} && ./vendor/bin/typo3 database:export" > live.sql
+        
+        echo "Database export completed. Size: $(wc -l < live.sql) lines"
+    
+    - name: Process database dump
+      run: |
+        echo "Processing database dump..."
+        
+        # Replace domains in the SQL dump
+        sed -i "s/${{ inputs.source_server }}/${{ inputs.target_server }}/g" live.sql
+        
+        echo "Database processing completed"
+    
+    - name: Import database to target server
+      run: |
+        echo "Uploading and importing database to target server..."
+        
+        # Upload SQL file
+        scp live.sql ${{ inputs.target_ssh_user }}@${{ inputs.target_server }}:${{ inputs.target_path }}/
+        
+        # Import database
+        ssh ${{ inputs.target_ssh_user }}@${{ inputs.target_server }} << 'EOF'
+          cd ${{ inputs.target_path }}
+          
+          # Clear existing database
+          if [ -f "./clearDB.sql" ]; then
+            mysql -u ${{ inputs.db_name }} -p${{ inputs.db_password }} ${{ inputs.db_name }} < ./clearDB.sql
+          fi
+          
+          # Import new database
+          mysql -u ${{ inputs.db_name }} -p${{ inputs.db_password }} ${{ inputs.db_name }} < ./live.sql
+          
+          # Additional database updates
+          mysql -u ${{ inputs.db_name }} -p${{ inputs.db_password }} -e "UPDATE sys_template SET config = REPLACE(config, '${{ inputs.source_server }}', '${{ inputs.target_server }}');" ${{ inputs.db_name }}
+          mysql -u ${{ inputs.db_name }} -p${{ inputs.db_password }} -e "UPDATE sys_template SET constants = REPLACE(constants, '${{ inputs.source_server }}', '${{ inputs.target_server }}');" ${{ inputs.db_name }}
+          mysql -u ${{ inputs.db_name }} -p${{ inputs.db_password }} -e "UPDATE tt_content SET bodytext = REPLACE(bodytext, '${{ inputs.source_server }}', '${{ inputs.target_server }}');" ${{ inputs.db_name }}
+          mysql -u ${{ inputs.db_name }} -p${{ inputs.db_password }} -e "UPDATE pages SET url = REPLACE(url, '${{ inputs.source_server }}', '${{ inputs.target_server }}') WHERE url IS NOT NULL;" ${{ inputs.db_name }}
+          
+          # Cleanup
+          rm -f ./live.sql
+        EOF
+    
+    - name: Sync files
+      run: |
+        echo "Syncing files from source to target server..."
+        
+        # Create temporary directory for file transfer
+        mkdir -p temp_sync
+        
+        # Sync files from source to GitHub runner
+        rsync -azP -e "ssh" \
+          ${{ inputs.source_ssh_user }}@${{ inputs.source_server }}:${{ inputs.source_path }}/ \
+          temp_sync/ \
+          --exclude='*.log' \
+          --exclude='var/cache/*' \
+          --exclude='var/log/*' \
+          --exclude='typo3temp/*'
+        
+        # Sync files from GitHub runner to target
+        rsync -azP -e "ssh" \
+          temp_sync/ \
+          ${{ inputs.target_ssh_user }}@${{ inputs.target_server }}:${{ inputs.target_path }}/ \
+          --delete \
+          --mkpath
+        
+        # Cleanup
+        rm -rf temp_sync
+    
+    - name: Update configuration on target server
+      run: |
+        echo "Updating configuration on target server..."
+        
+        ssh ${{ inputs.target_ssh_user }}@${{ inputs.target_server }} << 'EOF'
+          cd ${{ inputs.target_path }}
+          
+          # Update database configuration
+          CONFIG_FILE="config/system/settings.php"
+          if [ -f "$CONFIG_FILE" ]; then
+            cp "$CONFIG_FILE" "$CONFIG_FILE.backup"
+            
+            # Update database settings
+            sed -i "s/'dbname' => '[^']*'/'dbname' => '${{ inputs.db_name }}'/g" "$CONFIG_FILE"
+            sed -i "s/'user' => '[^']*'/'user' => '${{ inputs.db_name }}'/g" "$CONFIG_FILE"
+            sed -i "s/'password' => '[^']*'/'password' => '${{ inputs.db_password }}'/g" "$CONFIG_FILE"
+          fi
+          
+          # Create development robots.txt
+          cat > "public/robots.txt" << 'ROBOTS_EOF'
+        User-agent: *
+        Disallow: /
+        ROBOTS_EOF
+          
+          # Update .htaccess with IP restrictions
+          HTACCESS_FILE="public/.htaccess"
+          if [ -f "$HTACCESS_FILE" ]; then
+            # Create temporary file with IP restrictions
+            cat > "$HTACCESS_FILE.tmp" << 'HTACCESS_EOF'
+        Order Deny,Allow
+        Deny from all
+        Allow from 217.29.146.116
+        Allow from 62.46.64.235
+        HTACCESS_EOF
+            
+            # Append original .htaccess content
+            cat "$HTACCESS_FILE" >> "$HTACCESS_FILE.tmp"
+            mv "$HTACCESS_FILE.tmp" "$HTACCESS_FILE"
+          else
+            # Create new .htaccess
+            cat > "$HTACCESS_FILE" << 'HTACCESS_EOF'
+        Order Deny,Allow
+        Deny from all
+        Allow from 217.29.146.116
+        Allow from 62.46.64.235
+        HTACCESS_EOF
+          fi
+        EOF
+    
+    - name: Cleanup
+      if: always()
+      run: |
+        # Remove any temporary files
+        rm -f live.sql
+        rm -rf temp_sync
+        
+        echo "Sync completed successfully!"
