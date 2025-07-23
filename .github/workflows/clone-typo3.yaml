@@ -60,10 +60,10 @@ jobs:
           mysql -u ${{ secrets.DB_NAME }} -p${{ secrets.DB_PASSWORD }} ${{ secrets.DB_NAME }} < ./live.sql
           
           # Additional database updates
-          mysql -u ${{ secrets.DB_NAME }} -p${{ secrets.DB_PASSWORD }} -e "UPDATE sys_template SET config = REPLACE(config, '${{ secrets.SOURCE_SERVER }}', '${{ secrets.TARGET_SERVER }}');" ${{ secrets.DB_NAME }}
-          mysql -u ${{ secrets.DB_NAME }} -p${{ secrets.DB_PASSWORD }} -e "UPDATE sys_template SET constants = REPLACE(constants, '${{ secrets.SOURCE_SERVER }}', '${{ secrets.TARGET_SERVER }}');" ${{ secrets.DB_NAME }}
-          mysql -u ${{ secrets.DB_NAME }} -p${{ secrets.DB_PASSWORD }} -e "UPDATE tt_content SET bodytext = REPLACE(bodytext, '${{ secrets.SOURCE_SERVER }}', '${{ secrets.TARGET_SERVER }}');" ${{ secrets.DB_NAME }}
-          mysql -u ${{ secrets.DB_NAME }} -p${{ secrets.DB_PASSWORD }} -e "UPDATE pages SET url = REPLACE(url, '${{ secrets.SOURCE_SERVER }}', '${{ secrets.TARGET_SERVER }}') WHERE url IS NOT NULL;" ${{ secrets.DB_NAME }}
+          # mysql -u ${{ secrets.DB_NAME }} -p${{ secrets.DB_PASSWORD }} -e "UPDATE sys_template SET config = REPLACE(config, '${{ secrets.SOURCE_SERVER }}', '${{ secrets.TARGET_SERVER }}');" ${{ secrets.DB_NAME }}
+          # mysql -u ${{ secrets.DB_NAME }} -p${{ secrets.DB_PASSWORD }} -e "UPDATE sys_template SET constants = REPLACE(constants, '${{ secrets.SOURCE_SERVER }}', '${{ secrets.TARGET_SERVER }}');" ${{ secrets.DB_NAME }}
+          # mysql -u ${{ secrets.DB_NAME }} -p${{ secrets.DB_PASSWORD }} -e "UPDATE tt_content SET bodytext = REPLACE(bodytext, '${{ secrets.SOURCE_SERVER }}', '${{ secrets.TARGET_SERVER }}');" ${{ secrets.DB_NAME }}
+          # mysql -u ${{ secrets.DB_NAME }} -p${{ secrets.DB_PASSWORD }} -e "UPDATE pages SET url = REPLACE(url, '${{ secrets.SOURCE_SERVER }}', '${{ secrets.TARGET_SERVER }}') WHERE url IS NOT NULL;" ${{ secrets.DB_NAME }}
           
           # Cleanup
           rm -f ./live.sql
