@@ -26,8 +26,8 @@ jobs:
     - name: Export database from source server
       run: |
         echo "Exporting database from source server..."
-        ssh ${{ secrets.SOURCE_SSH_USER }}@${{ secrets.SOURCE_SERVER }} \
-          "cd ${{ secrets.SOURCE_PATH }} && ./vendor/bin/typo3 database:export" > live.sql
+        ssh ${{ vars.SOURCE_SSH_USER }}@${{ secrets.SOURCE_SERVER }} \
+          "cd ${{ vars.SOURCE_PATH }} && ./vendor/bin/typo3 database:export" > live.sql
         
         echo "Database export completed. Size: $(wc -l < live.sql) lines"
     
@@ -45,25 +45,25 @@ jobs:
         echo "Uploading and importing database to target server..."
         
         # Upload SQL file
-        scp live.sql ${{ secrets.TARGET_SSH_USER }}@${{ secrets.TARGET_SERVER }}:${{ secrets.TARGET_PATH }}/
+        scp live.sql ${{ vars.TARGET_SSH_USER }}@${{ secrets.TARGET_SERVER }}:${{ vars.TARGET_PATH }}/
         
         # Import database
-        ssh ${{ secrets.TARGET_SSH_USER }}@${{ secrets.TARGET_SERVER }} << 'EOF'
-          cd ${{ secrets.TARGET_PATH }}
+        ssh ${{ vars.TARGET_SSH_USER }}@${{ secrets.TARGET_SERVER }} << 'EOF'
+          cd ${{ vars.TARGET_PATH }}
           
           # Clear existing database
           if [ -f "./clearDB.sql" ]; then
-            mysql -u ${{ secrets.DB_NAME }} -p${{ secrets.DB_PASSWORD }} ${{ secrets.DB_NAME }} < ./clearDB.sql
+            mysql -u ${{ vars.DB_NAME }} -p${{ secrets.DB_PASSWORD }} ${{ vars.DB_NAME }} < ./clearDB.sql
           fi
           
           # Import new database
-          mysql -u ${{ secrets.DB_NAME }} -p${{ secrets.DB_PASSWORD }} ${{ secrets.DB_NAME }} < ./live.sql
+          mysql -u ${{ vars.DB_NAME }} -p${{ secrets.DB_PASSWORD }} ${{ vars.DB_NAME }} < ./live.sql
           
           # Additional database updates
-          # mysql -u ${{ secrets.DB_NAME }} -p${{ secrets.DB_PASSWORD }} -e "UPDATE sys_template SET config = REPLACE(config, '${{ secrets.SOURCE_SERVER }}', '${{ secrets.TARGET_SERVER }}');" ${{ secrets.DB_NAME }}
-          # mysql -u ${{ secrets.DB_NAME }} -p${{ secrets.DB_PASSWORD }} -e "UPDATE sys_template SET constants = REPLACE(constants, '${{ secrets.SOURCE_SERVER }}', '${{ secrets.TARGET_SERVER }}');" ${{ secrets.DB_NAME }}
-          mysql -u ${{ secrets.DB_NAME }} -p${{ secrets.DB_PASSWORD }} -e "UPDATE tt_content SET bodytext = REPLACE(bodytext, '${{ secrets.SOURCE_SERVER }}', '${{ secrets.TARGET_SERVER }}');" ${{ secrets.DB_NAME }}
-          # mysql -u ${{ secrets.DB_NAME }} -p${{ secrets.DB_PASSWORD }} -e "UPDATE pages SET url = REPLACE(url, '${{ secrets.SOURCE_SERVER }}', '${{ secrets.TARGET_SERVER }}') WHERE url IS NOT NULL;" ${{ secrets.DB_NAME }}
+          # mysql -u ${{ vars.DB_NAME }} -p${{ secrets.DB_PASSWORD }} -e "UPDATE sys_template SET config = REPLACE(config, '${{ secrets.SOURCE_SERVER }}', '${{ secrets.TARGET_SERVER }}');" ${{ vars.DB_NAME }}
+          # mysql -u ${{ vars.DB_NAME }} -p${{ secrets.DB_PASSWORD }} -e "UPDATE sys_template SET constants = REPLACE(constants, '${{ secrets.SOURCE_SERVER }}', '${{ secrets.TARGET_SERVER }}');" ${{ vars.DB_NAME }}
+          mysql -u ${{ vars.DB_NAME }} -p${{ secrets.DB_PASSWORD }} -e "UPDATE tt_content SET bodytext = REPLACE(bodytext, '${{ secrets.SOURCE_SERVER }}', '${{ secrets.TARGET_SERVER }}');" ${{ vars.DB_NAME }}
+          # mysql -u ${{ vars.DB_NAME }} -p${{ secrets.DB_PASSWORD }} -e "UPDATE pages SET url = REPLACE(url, '${{ secrets.SOURCE_SERVER }}', '${{ secrets.TARGET_SERVER }}') WHERE url IS NOT NULL;" ${{ vars.DB_NAME }}
           
           # Cleanup
           rm -f ./live.sql
@@ -78,7 +78,7 @@ jobs:
         
         # Sync files from source to GitHub runner
         rsync -azP -e "ssh" \
-          ${{ secrets.SOURCE_SSH_USER }}@${{ secrets.SOURCE_SERVER }}:${{ secrets.SOURCE_PATH }}/ \
+          ${{ vars.SOURCE_SSH_USER }}@${{ secrets.SOURCE_SERVER }}:${{ vars.SOURCE_PATH }}/ \
           temp_sync/ \
           --exclude='*.log' \
           --exclude='var/cache/*' \
@@ -90,7 +90,7 @@ jobs:
         # Sync files from GitHub runner to target
         rsync -azP -e "ssh" \
           temp_sync/ \
-          ${{ secrets.TARGET_SSH_USER }}@${{ secrets.TARGET_SERVER }}:${{ secrets.TARGET_PATH }}/ \
+          ${{ vars.TARGET_SSH_USER }}@${{ secrets.TARGET_SERVER }}:${{ vars.TARGET_PATH }}/ \
           --delete \
           --mkpath
         
@@ -101,8 +101,8 @@ jobs:
       run: |
         echo "Updating configuration on target server..."
         
-        ssh ${{ secrets.TARGET_SSH_USER }}@${{ secrets.TARGET_SERVER }} << 'EOF'
-          cd ${{ secrets.TARGET_PATH }}
+        ssh ${{ vars.TARGET_SSH_USER }}@${{ secrets.TARGET_SERVER }} << 'EOF'
+          cd ${{ vars.TARGET_PATH }}
           
           # Update database configuration
           CONFIG_FILE="config/system/settings.php"
@@ -110,8 +110,8 @@ jobs:
             cp "$CONFIG_FILE" "$CONFIG_FILE.backup"
             
             # Update database settings
-            sed -i "s/'dbname' => '[^']*'/'dbname' => '${{ secrets.DB_NAME }}'/g" "$CONFIG_FILE"
-            sed -i "s/'user' => '[^']*'/'user' => '${{ secrets.DB_NAME }}'/g" "$CONFIG_FILE"
+            sed -i "s/'dbname' => '[^']*'/'dbname' => '${{ vars.DB_NAME }}'/g" "$CONFIG_FILE"
+            sed -i "s/'user' => '[^']*'/'user' => '${{ vars.DB_NAME }}'/g" "$CONFIG_FILE"
             sed -i "s/'password' => '[^']*'/'password' => '${{ secrets.DB_PASSWORD }}'/g" "$CONFIG_FILE"
           fi
 
