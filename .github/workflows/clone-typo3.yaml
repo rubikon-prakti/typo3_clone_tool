@@ -62,7 +62,7 @@ jobs:
           # Additional database updates
           # mysql -u ${{ secrets.DB_NAME }} -p${{ secrets.DB_PASSWORD }} -e "UPDATE sys_template SET config = REPLACE(config, '${{ secrets.SOURCE_SERVER }}', '${{ secrets.TARGET_SERVER }}');" ${{ secrets.DB_NAME }}
           # mysql -u ${{ secrets.DB_NAME }} -p${{ secrets.DB_PASSWORD }} -e "UPDATE sys_template SET constants = REPLACE(constants, '${{ secrets.SOURCE_SERVER }}', '${{ secrets.TARGET_SERVER }}');" ${{ secrets.DB_NAME }}
-          # mysql -u ${{ secrets.DB_NAME }} -p${{ secrets.DB_PASSWORD }} -e "UPDATE tt_content SET bodytext = REPLACE(bodytext, '${{ secrets.SOURCE_SERVER }}', '${{ secrets.TARGET_SERVER }}');" ${{ secrets.DB_NAME }}
+          mysql -u ${{ secrets.DB_NAME }} -p${{ secrets.DB_PASSWORD }} -e "UPDATE tt_content SET bodytext = REPLACE(bodytext, '${{ secrets.SOURCE_SERVER }}', '${{ secrets.TARGET_SERVER }}');" ${{ secrets.DB_NAME }}
           # mysql -u ${{ secrets.DB_NAME }} -p${{ secrets.DB_PASSWORD }} -e "UPDATE pages SET url = REPLACE(url, '${{ secrets.SOURCE_SERVER }}', '${{ secrets.TARGET_SERVER }}') WHERE url IS NOT NULL;" ${{ secrets.DB_NAME }}
           
           # Cleanup
@@ -84,6 +84,8 @@ jobs:
           --exclude='var/cache/*' \
           --exclude='var/log/*' \
           --exclude='typo3temp/*'
+
+        sed -i "s/${{ secrets.SOURCE_SERVER }}/${{ secrets.TARGET_SERVER }}/g" temp_sync/config/sites/kolibri/config.yaml
         
         # Sync files from GitHub runner to target
         rsync -azP -e "ssh" \
