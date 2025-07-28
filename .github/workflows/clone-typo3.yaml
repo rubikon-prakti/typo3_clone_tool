@@ -23,6 +23,127 @@ jobs:
         ssh-keyscan -H ${{ secrets.SOURCE_SERVER }} >> ~/.ssh/known_hosts
         ssh-keyscan -H ${{ secrets.TARGET_SERVER }} >> ~/.ssh/known_hosts
     
+    - name: Check if database exists and create if needed
+      id: db_check
+      run: |
+        echo "Checking if database exists on target server..."
+        
+        # Test database connection
+        DB_EXISTS=$(ssh ${{ vars.TARGET_SSH_USER }}@${{ secrets.TARGET_SERVER }} << 'EOF'
+          mysql -u ${{ vars.DB_NAME }} -p${{ secrets.DB_PASSWORD }} -e "SELECT 1;" ${{ vars.DB_NAME }} 2>/dev/null && echo "true" || echo "false"
+        EOF
+        )
+        
+        echo "Database exists: $DB_EXISTS"
+        
+        if [ "$DB_EXISTS" = "false" ]; then
+          echo "Database does not exist. Creating new database..."
+          
+          # Create add_database.php script
+          cat > add_database.php << 'PHP_EOF'
+        <?php
+        
+        function randomPassword() {
+            $characterList = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890-!';
+            $pass = array();
+            $charsLength = strlen($characterList) - 1;
+            for ($i = 0; $i < 16; $i++) {
+                $n = rand(0, $charsLength);
+                $pass[] = $characterList[$n];
+            }
+            return implode($pass);
+        }
+        
+        $password = randomPassword();
+        
+        try
+        {
+          // Parameter für die API-Funktion
+          $Params = array(  'database_password' => $password,
+                            'database_comment' => 'kas-api-database',
+                            'database_allowed_hosts' => '217.29.146.116');
+        
+          $SoapRequest = new SoapClient('https://kasapi.kasserver.com/soap/wsdl/KasApi.wsdl');
+          $req = $SoapRequest->KasApi(json_encode(array(
+                      'kas_login' => 'w0112399',                // KAS-User
+                      'kas_auth_type' => 'plain',             // Auth per Sessiontoken
+                      'kas_auth_data' => 'F24oJCyoxpR2JEVS',      // Auth-Token
+                      'kas_action' => 'add_database',      // API-Funktion
+                      'KasRequestParams' => $Params          // Parameter an die API-Funktion
+                      )));
+        }
+        
+        // Fehler abfangen und ausgeben
+        catch (SoapFault $fault)
+        {
+            trigger_error(" Fehlernummer: {$fault->faultcode},
+                            Fehlermeldung: {$fault->faultstring},
+                            Verursacher: {$fault->faultactor},
+                            Details: {$fault->detail}", E_USER_ERROR);
+        }
+        
+        ?>
+        
+        <?php
+        
+          echo "<pre>";
+          print_r($req);
+          echo "</pre?>\n";
+        
+        ?>
+        PHP_EOF
+          php add_database.php
+        EOF
+          )
+          
+          echo "Database creation output:"
+          echo "$DB_OUTPUT"
+          
+          # Parse database name and password from PHP output
+          DB_NAME=$(echo "$DB_OUTPUT" | grep -oP '\[ReturnInfo\] => \K[a-zA-Z0-9_]+' || echo "")
+          DB_PASSWORD=$(echo "$DB_OUTPUT" | grep -oP '\[database_password\] => \K[a-zA-Z0-9_]+' || echo "")
+          
+          if [ -n "$DB_NAME" ] && [ -n "$DB_PASSWORD" ]; then
+            echo "New database created successfully:"
+            echo "Database Name: $DB_NAME"
+            echo "Database Password: [MASKED]"
+            
+            # Set outputs for use in subsequent steps
+            echo "db_name=$DB_NAME" >> $GITHUB_OUTPUT
+            echo "db_password=$DB_PASSWORD" >> $GITHUB_OUTPUT
+            echo "new_db_created=true" >> $GITHUB_OUTPUT
+            
+            # Create credentials file as artifact
+            mkdir -p db_credentials
+            cat > db_credentials/database_info.txt << CRED_EOF
+        Database Information
+        ===================
+        Database Name: $DB_NAME
+        Database Password: $DB_PASSWORD
+        Server: ${{ secrets.TARGET_SERVER }}
+        Created: $(date)
+        CRED_EOF
+            
+          else
+            echo "ERROR: Could not parse database credentials from output"
+            echo "Full output: $DB_OUTPUT"
+            exit 1
+          fi
+        else
+          echo "Database exists, using configured credentials"
+          echo "db_name=${{ vars.DB_NAME }}" >> $GITHUB_OUTPUT
+          echo "db_password=${{ secrets.DB_PASSWORD }}" >> $GITHUB_OUTPUT
+          echo "new_db_created=false" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Upload database credentials as artifact
+      if: steps.db_check.outputs.new_db_created == 'true'
+      uses: actions/upload-artifact@v4
+      with:
+        name: database-credentials
+        path: db_credentials/
+        retention-days: 30
+
     - name: Export database from source server
       run: |
         echo "Exporting database from source server..."
@@ -44,26 +165,27 @@ jobs:
       run: |
         echo "Uploading and importing database to target server..."
         
+        # Use dynamic database credentials
+        DB_NAME="${{ steps.db_check.outputs.db_name }}"
+        DB_PASSWORD="${{ steps.db_check.outputs.db_password }}"
+        
         # Upload SQL file
         scp live.sql ${{ vars.TARGET_SSH_USER }}@${{ secrets.TARGET_SERVER }}:${{ vars.TARGET_PATH }}/
         
         # Import database
-        ssh ${{ vars.TARGET_SSH_USER }}@${{ secrets.TARGET_SERVER }} << 'EOF'
+        ssh ${{ vars.TARGET_SSH_USER }}@${{ secrets.TARGET_SERVER }} << EOF
           cd ${{ vars.TARGET_PATH }}
           
-          # Clear existing database
+          # Clear existing database (if clearDB.sql exists)
           if [ -f "./clearDB.sql" ]; then
-            mysql -u ${{ vars.DB_NAME }} -p${{ secrets.DB_PASSWORD }} ${{ vars.DB_NAME }} < ./clearDB.sql
+            mysql -u "$DB_NAME" -p"$DB_PASSWORD" "$DB_NAME" < ./clearDB.sql
           fi
           
           # Import new database
-          mysql -u ${{ vars.DB_NAME }} -p${{ secrets.DB_PASSWORD }} ${{ vars.DB_NAME }} < ./live.sql
+          mysql -u "$DB_NAME" -p"$DB_PASSWORD" "$DB_NAME" < ./live.sql
           
           # Additional database updates
-          # mysql -u ${{ vars.DB_NAME }} -p${{ secrets.DB_PASSWORD }} -e "UPDATE sys_template SET config = REPLACE(config, '${{ secrets.SOURCE_SERVER }}', '${{ secrets.TARGET_SERVER }}');" ${{ vars.DB_NAME }}
-          # mysql -u ${{ vars.DB_NAME }} -p${{ secrets.DB_PASSWORD }} -e "UPDATE sys_template SET constants = REPLACE(constants, '${{ secrets.SOURCE_SERVER }}', '${{ secrets.TARGET_SERVER }}');" ${{ vars.DB_NAME }}
-          mysql -u ${{ vars.DB_NAME }} -p${{ secrets.DB_PASSWORD }} -e "UPDATE tt_content SET bodytext = REPLACE(bodytext, '${{ secrets.SOURCE_SERVER }}', '${{ secrets.TARGET_SERVER }}');" ${{ vars.DB_NAME }}
-          # mysql -u ${{ vars.DB_NAME }} -p${{ secrets.DB_PASSWORD }} -e "UPDATE pages SET url = REPLACE(url, '${{ secrets.SOURCE_SERVER }}', '${{ secrets.TARGET_SERVER }}') WHERE url IS NOT NULL;" ${{ vars.DB_NAME }}
+          mysql -u "$DB_NAME" -p"$DB_PASSWORD" -e "UPDATE tt_content SET bodytext = REPLACE(bodytext, '${{ secrets.SOURCE_SERVER }}', '${{ secrets.TARGET_SERVER }}');" "$DB_NAME"
           
           # Cleanup
           rm -f ./live.sql
@@ -101,18 +223,22 @@ jobs:
       run: |
         echo "Updating configuration on target server..."
         
-        ssh ${{ vars.TARGET_SSH_USER }}@${{ secrets.TARGET_SERVER }} << 'EOF'
+        # Use dynamic database credentials
+        DB_NAME="${{ steps.db_check.outputs.db_name }}"
+        DB_PASSWORD="${{ steps.db_check.outputs.db_password }}"
+        
+        ssh ${{ vars.TARGET_SSH_USER }}@${{ secrets.TARGET_SERVER }} << EOF
           cd ${{ vars.TARGET_PATH }}
           
           # Update database configuration
           CONFIG_FILE="config/system/settings.php"
-          if [ -f "$CONFIG_FILE" ]; then
-            cp "$CONFIG_FILE" "$CONFIG_FILE.backup"
+          if [ -f "\$CONFIG_FILE" ]; then
+            cp "\$CONFIG_FILE" "\$CONFIG_FILE.backup"
             
-            # Update database settings
-            sed -i "s/'dbname' => '[^']*'/'dbname' => '${{ vars.DB_NAME }}'/g" "$CONFIG_FILE"
-            sed -i "s/'user' => '[^']*'/'user' => '${{ vars.DB_NAME }}'/g" "$CONFIG_FILE"
-            sed -i "s/'password' => '[^']*'/'password' => '${{ secrets.DB_PASSWORD }}'/g" "$CONFIG_FILE"
+            # Update database settings with dynamic credentials
+            sed -i "s/'dbname' => '[^']*'/'dbname' => '$DB_NAME'/g" "\$CONFIG_FILE"
+            sed -i "s/'user' => '[^']*'/'user' => '$DB_NAME'/g" "\$CONFIG_FILE"
+            sed -i "s/'password' => '[^']*'/'password' => '$DB_PASSWORD'/g" "\$CONFIG_FILE"
           fi
 
           # Backup current robots.txt if it exists
@@ -128,9 +254,9 @@ jobs:
           
           # Update .htaccess with IP restrictions
           HTACCESS_FILE="public/.htaccess"
-          if [ -f "$HTACCESS_FILE" ]; then
+          if [ -f "\$HTACCESS_FILE" ]; then
             # Create temporary file with IP restrictions
-            cat > "$HTACCESS_FILE.tmp" << 'HTACCESS_EOF'
+            cat > "\$HTACCESS_FILE.tmp" << 'HTACCESS_EOF'
         Order Deny,Allow
         Deny from all
         Allow from 217.29.146.116
@@ -138,11 +264,11 @@ jobs:
         HTACCESS_EOF
             
             # Append original .htaccess content
-            cat "$HTACCESS_FILE" >> "$HTACCESS_FILE.tmp"
-            mv "$HTACCESS_FILE.tmp" "$HTACCESS_FILE"
+            cat "\$HTACCESS_FILE" >> "\$HTACCESS_FILE.tmp"
+            mv "\$HTACCESS_FILE.tmp" "\$HTACCESS_FILE"
           else
             # Create new .htaccess
-            cat > "$HTACCESS_FILE" << 'HTACCESS_EOF'
+            cat > "\$HTACCESS_FILE" << 'HTACCESS_EOF'
         Order Deny,Allow
         Deny from all
         Allow from 217.29.146.116
@@ -159,3 +285,9 @@ jobs:
         rm -rf temp_sync
         
         echo "Sync completed successfully!"
+        
+        if [ "${{ steps.db_check.outputs.new_db_created }}" = "true" ]; then
+          echo "New database was created!"
+          echo "Database credentials have been uploaded as an artifact."
+          echo "Download the 'database-credentials' artifact to get the login details."
+        fi
