@@ -1,0 +1,64 @@
+name: Delete KAS-DB
+
+on:
+  workflow_dispatch:
+    inputs:
+      dbname:
+        description: 'Database Name (last one will be deleted if none is selected)'
+        required: false
+
+jobs:
+  extract-dbname:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
+
+      - name: Get DB-Name
+        run: |
+          if [ -n "${{ github.event.inputs.dbname }}" ]; then
+            DBNAME="${{ github.event.inputs.dbname }}"
+            echo "Input found: $DBNAME"
+          else
+            DBNAME=$(grep -oE '\bd[a-f0-9]{7}\b' db_credentials/database_info.txt | head -n 1)
+            echo "No input found. DB-Name from file: $DBNAME"
+          fi
+          echo "DBNAME=$DBNAME" >> $GITHUB_ENV
+
+      - name: Create PHP file
+        run: |
+          cat <<EOF > delete_db.php
+          <?php
+          try
+          {
+            // Parameters for the API
+            \$Params = array('database_login' => '${{ env.DBNAME }}');
+
+            \$SoapRequest = new SoapClient('https://kasapi.kasserver.com/soap/wsdl/KasApi.wsdl');
+            \$req = \$SoapRequest->KasApi(json_encode(array(
+                        'kas_login' => '${{ secrets.KAS_USER }}',
+                        'kas_auth_type' => 'plain',
+                        'kas_auth_data' => '${{ secrets.KAS_PASSWORD }}',
+                        'kas_action' => 'delete_database',
+                        'KasRequestParams' => \$Params
+            )));
+          }
+          // Catch/Output errors
+          catch (SoapFault \$fault)
+          {
+              trigger_error(" Fehlernummer: {\$fault->faultcode},
+                              Fehlermeldung: {\$fault->faultstring},
+                              Verursacher: {\$fault->faultactor},
+                              Details: {\$fault->detail}", E_USER_ERROR);
+          }
+
+          echo "<pre>";
+          print_r(\$req);
+          echo "</pre>";
+          ?>
+          EOF
+
+      - name: Run PHP script and delete database
+        run: php delete_db.php
+          
